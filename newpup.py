@@ -101,64 +101,9 @@ def make_or_cleanup(local_dir):
     for f in filelist:
         os.remove(os.path.join(local_dir, f))
 
-archive_text = "metadata.txt"
-archive_resized = "input_resized.png"
-archive_aligned = "aligned.png"
-archive_recon = "reconstruction.png"
-archive_transformed = "transformed.png"
-archive_swapped = "swapped.png"
-archive_final_image = "final_image.png"
-archive_final_movie = "final_movie.mp4"
-
-def archive_post(subdir, posted_id, original_text, post_text, respond_text, downloaded_basename, downloaded_input, final_movie, archive_dir="archives"):
-    # setup paths
-    archive_dir = "{}/{}".format(archive_dir, subdir)
-    archive_input_path = "{}/{}".format(archive_dir, downloaded_basename)
-    archive_text_path = "{}/{}".format(archive_dir, archive_text)
-    archive_resized_path = "{}/{}".format(archive_dir, archive_resized)
-    archive_aligned_path = "{}/{}".format(archive_dir, archive_aligned)
-    archive_recon_path = "{}/{}".format(archive_dir, archive_recon)
-    archive_transformed_path = "{}/{}".format(archive_dir, archive_transformed)
-    archive_swapped_path = "{}/{}".format(archive_dir, archive_swapped)
-    archive_final_image_path = "{}/{}".format(archive_dir, archive_final_image)
-    archive_final_movie_path = "{}/{}".format(archive_dir, archive_final_movie)
-
-    # prepare output directory
-    make_or_cleanup(archive_dir)
-
-    # save metadata
-    with open(archive_text_path, 'a') as f:
-        f.write(u"posted_id\t{}\n".format(posted_id))
-        f.write(u"original_text\t{}\n".format(original_text))
-        # these might be unicode. what a PITA
-        f.write(u'\t'.join([u"post_text", post_text]).encode('utf-8').strip())
-        f.write(u"\n")
-        f.write(u'\t'.join([u"respond_text", respond_text]).encode('utf-8').strip())
-        f.write(u"\n")
-        f.write(u"subdir\t{}\n".format(subdir))
-
-    # save input, a few working files, outputs
-    copyfile(downloaded_input, archive_input_path)
-    copyfile(resized_input_file, archive_resized_path)
-    copyfile(aligned_file, archive_aligned_path)
-    copyfile(recon_file, archive_recon_path)
-    copyfile(transformed_file, archive_transformed_path)
-    copyfile(swapped_file, archive_swapped_path)
-    copyfile(final_image, archive_final_image_path)
-    copyfile(final_movie, archive_final_movie_path)
-
 max_extent = 720
 def resize_to_a_good_size(infile, outfile):
     image_array = imread(infile, mode='RGB')
-
-    # this is believed to no longer be necessary because imread is coercing to rgb
-    # im_shape = image_array.shape
-    # if len(im_shape) == 2:
-    #     h, w = im_shape
-    #     print("converting from 1 channel to 3")
-    #     image_array = np.array([image_array, image_array, image_array])
-    # else:
-    #     h, w, _ = im_shape
 
     im_shape = image_array.shape
     h, w, _ = im_shape
@@ -209,7 +154,7 @@ def resize_to_a_good_size(infile, outfile):
 def str2bool(v):
   return v.lower() in ("yes", "true", "t", "1")
 
-def do_convert(raw_infile, outfile, dmodel, classifier, do_smile, smile_offsets, image_size, initial_steps=10, recon_steps=10, offset_steps=20, end_bumper_steps=10, check_extent=True, wraparound=True):
+def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size, initial_steps=10, recon_steps=10, offset_steps=20, end_bumper_steps=10, check_extent=True):
     failure_return_status = False, False, False
 
     infile = resized_input_file;
@@ -338,12 +283,6 @@ def do_convert(raw_infile, outfile, dmodel, classifier, do_smile, smile_offsets,
 
     last_sequence_index = initial_steps + recon_steps + offset_steps - 1
     last_filename = samples_sequence_filename.format(last_sequence_index)
-    if wraparound:
-        # copy last image back around to first
-        first_filename = samples_sequence_filename.format(0)
-        print("wraparound file: {} -> {}".format(last_filename, first_filename))
-        copyfile(last_filename, first_filename)
-
     copyfile(last_filename, final_image)
 
     # also add a final out bumper
@@ -352,21 +291,11 @@ def do_convert(raw_infile, outfile, dmodel, classifier, do_smile, smile_offsets,
         copyfile(last_filename, filename)
         print("end bumper file: {}".format(filename))
 
-    if os.path.exists(movie_file):
-        os.remove(movie_file)
-    command = "/usr/local/bin/ffmpeg -r 20 -f image2 -i \"{}\" -c:v libx264 -crf 20 -pix_fmt yuv420p -tune fastdecode -y -tune zerolatency -profile:v baseline {}".format(ffmpeg_sequence_filename, movie_file)
-    print("ffmpeg command: {}".format(command))
-    result = os.system(command)
-    if result != 0:
-        return failure_return_status
-    if not os.path.isfile(movie_file):
-        return failure_return_status
-
     return True, has_smile, wide_image
 
-def check_lazy_initialize(args, dmodel, classifier, smile_offsets):
+def check_lazy_initialize(args, dmodel, smile_offsets):
     # debug: don't load anything...
-    # return model, classifier, smile_offsets
+    # return model, smile_offsets
 
     # first get model ready
     if dmodel is None and args.model is not None:
@@ -385,23 +314,16 @@ def check_lazy_initialize(args, dmodel, classifier, smile_offsets):
         neg_smile_offset = -1 * smile_offset_open - 1.25 * smile_offset_smile + 1.0 * smile_offset_blur
         smile_offsets = [pos_smile_offset, neg_smile_offset]
 
-    return dmodel, classifier, smile_offsets
+    return dmodel, smile_offsets
 
 if __name__ == "__main__":
     # argparse
-    parser = argparse.ArgumentParser(description='Follow account and repost munged images')
-    parser.add_argument('-a','--accounts', help='Accounts to follow (comma separated)', default="peopleschoice,NPG")
+    parser = argparse.ArgumentParser(description='Perform neural puppet transformations on images')
     parser.add_argument('-d','--debug', help='Debug: do not post', default=False, action='store_true')
-    parser.add_argument('-o','--open', help='Open image (when in debug mode)', default=False, action='store_true')
-    parser.add_argument('-c','--creds', help='Twitter json credentials1 (smile)', default='creds.json')
     parser.add_argument('--do-smile', default=None,
                         help='Force smile on/off (skip classifier) [1/0]')
-    parser.add_argument('-n','--no-update', dest='no_update',
-            help='Do not update postion on timeline', default=False, action='store_true')
     parser.add_argument("--input-file", dest='input_file', default=None,
                         help="single image file input (for debugging)")
-    parser.add_argument("--archive-subdir", dest='archive_subdir', default=None,
-                        help="specific subdirectory for archiving results")
     parser.add_argument("--model", dest='model', type=str, default=None,
                         help="path to the saved model")
     parser.add_argument('--anchor-offset', dest='anchor_offset', default=None,
@@ -410,29 +332,25 @@ if __name__ == "__main__":
                         help="smile_index,open_mouth_index,blur_index")
     parser.add_argument("--image-size", dest='image_size', type=int, default=64,
                         help="size of (offset) images")
-    parser.add_argument('--no-wrap', dest="wraparound", default=True,
-                        help='Do not wraparound last image to front', action='store_false')
+
+    # parser.add_argument("--input-directory", dest='input_directory', default="inputs",
+    #                     help="directory for input files")
+    # parser.add_argument("--output-directory", dest='output_directory', default="outputs",
+    #                     help="directory for output files")
+    # parser.add_argument("--input-file", dest='input_file', default=None,
+    #                     help="single file input (overrides input-directory)")
+    # parser.add_argument("--output-file", dest='output_file', default="output.png",
+    #                     help="single file output")
+
     args = parser.parse_args()
 
     # initialize and then lazily load
     dmodel = None
-    classifier = None
     smile_offsets = None
 
     final_movie = "temp_files/final_movie.mp4"
     final_image = "temp_files/final_image.png"
 
-    if args.archive_subdir:
-        archive_subdir = args.archive_subdir
-    else:
-        archive_subdir = time.strftime("%Y%m%d_%H%M%S")
-
-    # do debug as a special case
-    if args.input_file:
-        dmodel, classifier, smile_offsets = check_lazy_initialize(args, dmodel, classifier, smile_offsets)
-        result, had_smile, is_wide = do_convert(args.input_file, final_movie, dmodel, classifier, args.do_smile, smile_offsets, args.image_size, check_extent=False, wraparound=args.wraparound)
-        print("result: {}, had_smile: {}".format(result, had_smile))
-        if result and not args.no_update:
-            input_basename = os.path.basename(args.input_file)
-            archive_post(archive_subdir, "no_id", had_smile, "no_post", "no_respond", input_basename, args.input_file, final_movie, ".")
-        exit(0)
+    dmodel, smile_offsets = check_lazy_initialize(args, dmodel, smile_offsets)
+    result, had_smile, is_wide = do_convert(args.input_file, final_movie, dmodel, args.do_smile, smile_offsets, args.image_size, check_extent=False)
+    print("result: {}, had_smile: {}".format(result, had_smile))
