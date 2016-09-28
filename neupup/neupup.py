@@ -305,7 +305,7 @@ def check_lazy_initialize(args, dmodel, smile_offsets):
 
     return dmodel, smile_offsets
 
-if __name__ == "__main__":
+def main(args=None):
     # argparse
     parser = argparse.ArgumentParser(description='Perform neural puppet transformations on images')
     parser.add_argument('-d','--debug', help='Debug: do not post', default=False, action='store_true')
@@ -354,3 +354,6 @@ if __name__ == "__main__":
         # always save as png
         outfile = "{}.png".format(os.path.splitext(outfile)[0])
         result, had_smile, is_wide = do_convert(infile, outfile, dmodel, args.do_smile, smile_offsets, args.image_size, check_extent=False)
+
+if __name__ == "__main__":
+    main()
