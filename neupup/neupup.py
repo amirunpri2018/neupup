@@ -336,6 +336,7 @@ def main(args=None):
     dmodel = None
     smile_offsets = None
 
+    make_or_cleanup("temp_files")
     final_image = "temp_files/final_image.png"
 
     dmodel, smile_offsets = check_lazy_initialize(args, dmodel, smile_offsets)
