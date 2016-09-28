@@ -12,6 +12,7 @@ import os
 import doalign
 import random
 from subprocess import call
+import glob
 
 from plat.utils import anchors_from_image, offset_from_string, get_json_vectors
 from plat.grid_layout import create_mine_grid
@@ -25,11 +26,6 @@ from scipy.misc import imread, imsave, imresize
 import theano
 import hashlib
 import time
-
-# tweet_suffix = u""
-# tweet_suffix = u" #test_hashtag"
-# tweet_suffix = u" #nuclai16"
-tweet_suffix = u" #NeuralPuppet"
 
 # returns True if file not found and can be processed
 def check_recent(infile, recentfile):
@@ -154,7 +150,7 @@ def resize_to_a_good_size(infile, outfile):
 def str2bool(v):
   return v.lower() in ("yes", "true", "t", "1")
 
-def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size, initial_steps=10, recon_steps=10, offset_steps=20, end_bumper_steps=10, check_extent=True):
+def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size, initial_steps=1, recon_steps=1, offset_steps=2, check_extent=True):
     failure_return_status = False, False, False
 
     infile = resized_input_file;
@@ -284,18 +280,13 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
     last_sequence_index = initial_steps + recon_steps + offset_steps - 1
     last_filename = samples_sequence_filename.format(last_sequence_index)
     copyfile(last_filename, final_image)
-
-    # also add a final out bumper
-    for i in range(last_sequence_index, last_sequence_index + end_bumper_steps):
-        filename = samples_sequence_filename.format(i + 1)
-        copyfile(last_filename, filename)
-        print("end bumper file: {}".format(filename))
+    copyfile(last_filename, outfile)
 
     return True, has_smile, wide_image
 
 def check_lazy_initialize(args, dmodel, smile_offsets):
     # debug: don't load anything...
-    # return model, smile_offsets
+    # return dmodel, smile_offsets
 
     # first get model ready
     if dmodel is None and args.model is not None:
@@ -307,12 +298,10 @@ def check_lazy_initialize(args, dmodel, smile_offsets):
         offsets = get_json_vectors(args.anchor_offset)
         dim = len(offsets[0])
         offset_indexes = args.anchor_indexes.split(",")
-        smile_offset_smile = offset_from_string(offset_indexes[0], offsets, dim)
-        smile_offset_open = offset_from_string(offset_indexes[1], offsets, dim)
-        smile_offset_blur = offset_from_string(offset_indexes[2], offsets, dim)
-        pos_smile_offset = 1 * smile_offset_open + 1.25 * smile_offset_smile + 1.0 * smile_offset_blur
-        neg_smile_offset = -1 * smile_offset_open - 1.25 * smile_offset_smile + 1.0 * smile_offset_blur
-        smile_offsets = [pos_smile_offset, neg_smile_offset]
+        offset_vector = offset_from_string(offset_indexes[0], offsets, dim)
+        for n in range(1, len(offset_indexes)):
+            offset_vector += offset_from_string(offset_indexes[n], offsets, dim)
+        smile_offsets = [offset_vector, -offset_vector]
 
     return dmodel, smile_offsets
 
@@ -322,8 +311,6 @@ if __name__ == "__main__":
     parser.add_argument('-d','--debug', help='Debug: do not post', default=False, action='store_true')
     parser.add_argument('--do-smile', default=None,
                         help='Force smile on/off (skip classifier) [1/0]')
-    parser.add_argument("--input-file", dest='input_file', default=None,
-                        help="single image file input (for debugging)")
     parser.add_argument("--model", dest='model', type=str, default=None,
                         help="path to the saved model")
     parser.add_argument('--anchor-offset', dest='anchor_offset', default=None,
@@ -333,14 +320,14 @@ if __name__ == "__main__":
     parser.add_argument("--image-size", dest='image_size', type=int, default=64,
                         help="size of (offset) images")
 
-    # parser.add_argument("--input-directory", dest='input_directory', default="inputs",
-    #                     help="directory for input files")
-    # parser.add_argument("--output-directory", dest='output_directory', default="outputs",
-    #                     help="directory for output files")
-    # parser.add_argument("--input-file", dest='input_file', default=None,
-    #                     help="single file input (overrides input-directory)")
-    # parser.add_argument("--output-file", dest='output_file', default="output.png",
-    #                     help="single file output")
+    parser.add_argument("--input-directory", dest='input_directory', default="inputs",
+                        help="directory for input files")
+    parser.add_argument("--output-directory", dest='output_directory', default="outputs",
+                        help="directory for output files")
+    parser.add_argument("--input-file", dest='input_file', default=None,
+                        help="single file input (overrides input-directory)")
+    parser.add_argument("--output-file", dest='output_file', default="output.png",
+                        help="single file output")
 
     args = parser.parse_args()
 
@@ -348,9 +335,22 @@ if __name__ == "__main__":
     dmodel = None
     smile_offsets = None
 
-    final_movie = "temp_files/final_movie.mp4"
     final_image = "temp_files/final_image.png"
 
     dmodel, smile_offsets = check_lazy_initialize(args, dmodel, smile_offsets)
-    result, had_smile, is_wide = do_convert(args.input_file, final_movie, dmodel, args.do_smile, smile_offsets, args.image_size, check_extent=False)
-    print("result: {}, had_smile: {}".format(result, had_smile))
+
+    if args.input_file is not None:
+        result, had_smile, is_wide = do_convert(args.input_file, args.output_file, dmodel, args.do_smile, smile_offsets, args.image_size, check_extent=False)
+        print("result: {}, had_smile: {}".format(result, had_smile))
+        exit(0)
+
+    # read input files
+    files = glob.glob("{}/*.*".format(args.input_directory))
+    if not os.path.exists(args.output_directory):
+        os.makedirs(args.output_directory)
+
+    for infile in files:
+        outfile = os.path.join(args.output_directory, os.path.basename(infile))
+        # always save as png
+        outfile = "{}.png".format(os.path.splitext(outfile)[0])
+        result, had_smile, is_wide = do_convert(infile, outfile, dmodel, args.do_smile, smile_offsets, args.image_size, check_extent=False)
