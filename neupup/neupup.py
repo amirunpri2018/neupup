@@ -7,7 +7,7 @@ import sys
 import re
 import urllib
 import urlparse, os
-from shutil import copyfile
+import shutil
 import os
 from faceswap import doalign
 import faceswap.core
@@ -17,9 +17,9 @@ import glob
 
 from plat.utils import anchors_from_image, offset_from_string, get_json_vectors
 from plat.grid_layout import create_mine_grid
+from plat import zoo
 
 # discgen related imports
-from discgen.interface import DiscGenModel
 import numpy as np
 from PIL import Image
 from scipy.misc import imread, imsave, imresize
@@ -46,7 +46,7 @@ def check_recent(infile, recentfile):
 
 def add_to_recent(infile, comment, recentfile, limit=500):
     if os.path.isfile(recentfile):
-        copyfile(recentfile, "{}.bak".format(recentfile))
+        shutil.copyfile(recentfile, "{}.bak".format(recentfile))
 
     try:
         with open(recentfile) as f :
@@ -95,7 +95,11 @@ def make_or_cleanup(local_dir):
     # and clean it out if it is there
     filelist = [ f for f in os.listdir(local_dir) ]
     for f in filelist:
-        os.remove(os.path.join(local_dir, f))
+        del_path = os.path.join(local_dir, f)
+        if os.path.isdir(del_path):
+            shutil.rmtree(del_path)
+        else:
+            os.remove(del_path)
 
 max_extent = 720
 def resize_to_a_good_size(infile, outfile):
@@ -280,8 +284,8 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
 
     last_sequence_index = initial_steps + recon_steps + offset_steps - 1
     last_filename = samples_sequence_filename.format(last_sequence_index)
-    copyfile(last_filename, final_image)
-    copyfile(last_filename, outfile)
+    shutil.copyfile(last_filename, final_image)
+    shutil.copyfile(last_filename, outfile)
 
     return True, has_smile, wide_image
 
@@ -290,9 +294,9 @@ def check_lazy_initialize(args, dmodel, smile_offsets):
     # return dmodel, smile_offsets
 
     # first get model ready
-    if dmodel is None and args.model is not None:
-        print('Loading saved model...')
-        dmodel = DiscGenModel(filename=args.model)
+    if dmodel is None and (args.model is not None or args.model_file is not None):
+        print('Finding saved model...')
+        dmodel = zoo.load_model(args.model, args.model_file, args.model_type)
 
     # get attributes
     if smile_offsets is None and args.anchor_offset is not None:
@@ -313,7 +317,11 @@ def main(args=None):
     parser.add_argument('--do-smile', default=None,
                         help='Force smile on/off (skip classifier) [1/0]')
     parser.add_argument("--model", dest='model', type=str, default=None,
+                        help="name of model in plat zoo")
+    parser.add_argument("--model-file", dest='model_file', type=str, default=None,
                         help="path to the saved model")
+    parser.add_argument("--model-type", dest='model_type', type=str, default=None,
+                        help="the type of model (usually inferred from filename)")
     parser.add_argument('--anchor-offset', dest='anchor_offset', default=None,
                         help="use json file as source of each anchors offsets")
     parser.add_argument('--anchor-indexes', dest='anchor_indexes', default="31,21,41",
