@@ -63,7 +63,7 @@ def add_to_recent(infile, comment, recentfile, limit=500):
         f.writelines(content)
 
 max_allowable_extent = 180
-min_allowable_extent = 60
+min_allowable_extent = 1
 # reized input file
 resized_input_file = "temp_files/resized_input_file.png"
 # the input image file is algined and saved
@@ -204,7 +204,10 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
 
     # encode aligned image array as vector, apply offset
     anchor = dmodel.encode_images(anchor_images)
-    if has_smile:
+    if smile_offsets is None:
+        print("No offset applied")
+        chosen_anchor = [anchor[0], anchor[0]]
+    elif has_smile:
         print("Smile detected, removing")
         chosen_anchor = [anchor[0], anchor[0] + smile_offsets[1]]
     else:
