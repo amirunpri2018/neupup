@@ -76,16 +76,11 @@ transformed_file = "temp_files/transformed.png"
 swapped_file = "temp_files/swapped_file.png"
 # used to save surprising failures
 debug_file = "temp_files/debug.png"
-# this is the final swapped image
-final_image = "temp_files/final_image.png"
 # the interpolated sequence is saved into this directory
 sequence_dir = "temp_files/image_sequence/"
 # template for output png files
 generic_sequence = "{:03d}.png"
 samples_sequence_filename = sequence_dir + generic_sequence
-# template for ffmpeg arguments
-ffmpeg_sequence = "%3d.png"
-ffmpeg_sequence_filename = sequence_dir + ffmpeg_sequence
 
 def make_or_cleanup(local_dir):
     # make output directory if it is not there
@@ -154,7 +149,7 @@ def resize_to_a_good_size(infile, outfile):
 def str2bool(v):
   return v.lower() in ("yes", "true", "t", "1")
 
-def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size, initial_steps=1, recon_steps=1, offset_steps=2, check_extent=True):
+def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size, min_span, initial_steps=1, recon_steps=1, offset_steps=2, check_extent=True):
     failure_return_status = False, False, False
 
     infile = resized_input_file;
@@ -165,7 +160,7 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
 
     # first align input face to canonical alignment and save result
     try:
-        if not doalign.align_face(infile, aligned_file, image_size, max_extension_amount=0):
+        if not doalign.align_face(infile, aligned_file, image_size, min_span=min_span, max_extension_amount=0):
             return failure_return_status
     except Exception as e:
         # get_landmarks strangely fails sometimes (see bad_shriek test image)
@@ -176,7 +171,7 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
     try:
         body_image_array = imread(infile, mode='RGB')
         print(body_image_array.shape)
-        body_landmarks = faceswap.core.get_landmarks(body_image_array)
+        body_rect, body_landmarks = faceswap.core.get_landmarks(body_image_array)
         max_extent = faceswap.core.get_max_extent(body_landmarks)
     except faceswap.core.NoFaces:
         print("faceswap: no faces in {}".format(infile))
@@ -196,23 +191,28 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
     # read in aligned file to image array
     _, _, anchor_images = anchors_from_image(aligned_file, image_size=(image_size, image_size))
 
-    # classifiy aligned as smiling or not
-    if do_smile is not None:
-        has_smile = not str2bool(do_smile)
-    else:
-        has_smile = random.choice([True, False])
-
     # encode aligned image array as vector, apply offset
-    anchor = dmodel.encode_images(anchor_images)
-    if smile_offsets is None:
-        print("No offset applied")
-        chosen_anchor = [anchor[0], anchor[0]]
-    elif has_smile:
-        print("Smile detected, removing")
-        chosen_anchor = [anchor[0], anchor[0] + smile_offsets[1]]
+    encoded = dmodel.encode_images(anchor_images)[0]
+
+    if smile_offsets is not None:
+        smile_vector = smile_offsets[0]
+        smile_score = np.dot(smile_vector, encoded)
+        smile_detected = (smile_score > 0)
+        print("Smile vector detector:", smile_score, smile_detected)
+        if do_smile is None:
+            has_smile = smile_detected
+        else:
+            has_smile = not str2bool(do_smile)
+
+        if has_smile:
+            print("Smile detected, removing")
+            chosen_anchor = [encoded, encoded - smile_vector]
+        else:
+            print("Smile not detected, providing")
+            chosen_anchor = [encoded, encoded + smile_vector]
     else:
-        print("Smile not detected, providing")
-        chosen_anchor = [anchor[0], anchor[0] + smile_offsets[0]]
+        has_smile = False
+        chosen_anchor = [encoded, encoded]
 
     z_dim = dmodel.get_zdim()
 
@@ -272,7 +272,7 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
             face_image_array = (255 * np.dstack(sample)).astype(np.uint8)
             # if i == final_face_index:
             #     imsave(transformed_file, face_image_array)
-            face_landmarks = faceswap.core.get_landmarks(face_image_array)
+            face_rect, face_landmarks = faceswap.core.get_landmarks(face_image_array)
             filename = samples_sequence_filename.format(cur_index)
             imsave(transformed_file, face_image_array)
             # faceswap.core.do_faceswap_from_face(infile, face_image_array, face_landmarks, filename)
@@ -287,7 +287,6 @@ def do_convert(raw_infile, outfile, dmodel, do_smile, smile_offsets, image_size,
 
     last_sequence_index = initial_steps + recon_steps + offset_steps - 1
     last_filename = samples_sequence_filename.format(last_sequence_index)
-    shutil.copyfile(last_filename, final_image)
     shutil.copyfile(last_filename, outfile)
 
     return True, has_smile, wide_image
@@ -309,14 +308,13 @@ def check_lazy_initialize(args, dmodel, smile_offsets):
         offset_vector = offset_from_string(offset_indexes[0], offsets, dim)
         for n in range(1, len(offset_indexes)):
             offset_vector += offset_from_string(offset_indexes[n], offsets, dim)
-        smile_offsets = [offset_vector, -offset_vector]
+        smile_offsets = [offset_vector]
 
     return dmodel, smile_offsets
 
 def main(args=None):
     # argparse
     parser = argparse.ArgumentParser(description='Perform neural puppet transformations on images')
-    parser.add_argument('-d','--debug', help='Debug: do not post', default=False, action='store_true')
     parser.add_argument('--do-smile', default=None,
                         help='Force smile on/off (skip classifier) [1/0]')
     parser.add_argument("--model", dest='model', type=str, default=None,
@@ -327,15 +325,21 @@ def main(args=None):
                         help="the type of model (usually inferred from filename)")
     parser.add_argument('--anchor-offset', dest='anchor_offset', default=None,
                         help="use json file as source of each anchors offsets")
-    parser.add_argument('--anchor-indexes', dest='anchor_indexes', default="31,21,41",
-                        help="smile_index,open_mouth_index,blur_index")
+    parser.add_argument('--anchor-indexes', dest='anchor_indexes', default="31,21",
+                        help="smile_index,open_mouth_index")
     parser.add_argument("--image-size", dest='image_size', type=int, default=64,
                         help="size of (offset) images")
+    parser.add_argument("--min-span", dest='min_span', type=int, default=None,
+                        help="minimum width for detected face (default: image-size/4")
 
+    parser.add_argument('--sort-inputs', dest='sort_inputs',
+                        help='Sort inputs before processing', default=False, action='store_true')
     parser.add_argument("--input-directory", dest='input_directory', default="inputs",
                         help="directory for input files")
     parser.add_argument("--output-directory", dest='output_directory', default="outputs",
                         help="directory for output files")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="data offset to skip")
     parser.add_argument("--input-file", dest='input_file', default=None,
                         help="single file input (overrides input-directory)")
     parser.add_argument("--output-file", dest='output_file', default="output.png",
@@ -348,12 +352,16 @@ def main(args=None):
     smile_offsets = None
 
     make_or_cleanup("temp_files")
-    final_image = "temp_files/final_image.png"
+
+    if args.min_span is not None:
+        min_span = args.min_span
+    else:
+        min_span = args.image_size / 4
 
     dmodel, smile_offsets = check_lazy_initialize(args, dmodel, smile_offsets)
 
     if args.input_file is not None:
-        result, had_smile, is_wide = do_convert(args.input_file, args.output_file, dmodel, args.do_smile, smile_offsets, args.image_size, check_extent=False)
+        result, had_smile, is_wide = do_convert(args.input_file, args.output_file, dmodel, args.do_smile, smile_offsets, args.image_size, min_span, check_extent=False)
         print("result: {}, had_smile: {}".format(result, had_smile))
         exit(0)
 
@@ -362,11 +370,18 @@ def main(args=None):
     if not os.path.exists(args.output_directory):
         os.makedirs(args.output_directory)
 
+    if args.sort_inputs:
+        files = sorted(files)
+
+    if args.offset > 0:
+        print("Trimming from {} to {}".format(len(files), args.offset))
+        files = files[args.offset:]
+
     for infile in files:
         outfile = os.path.join(args.output_directory, os.path.basename(infile))
         # always save as png
         outfile = "{}.png".format(os.path.splitext(outfile)[0])
-        result, had_smile, is_wide = do_convert(infile, outfile, dmodel, args.do_smile, smile_offsets, args.image_size, check_extent=False)
+        result, had_smile, is_wide = do_convert(infile, outfile, dmodel, args.do_smile, smile_offsets, args.image_size, min_span, check_extent=False)
 
 if __name__ == "__main__":
     main()
